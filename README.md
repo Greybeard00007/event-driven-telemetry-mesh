@@ -143,9 +143,13 @@ Rather than sending every telemetry tick to an LLM, the system adopts a two-tier
    - Concurrency is throttled via an asynchronous semaphore to prevent GPU/CPU thrashing.
    - In offline, low-VRAM, or test environments, a built-in petroleum engineering heuristic fallback activates automatically without dropping anomalies.
 
-### 4. TimescaleDB Time-Series Partitioning
-- **Hypertables**: High-velocity sensor ticks are partitioned into 1-day chunk intervals (`rig_telemetry`) and 7-day chunk intervals (`anomaly_events`).
-- **Continuous Aggregates**: Real-time materialized view (`rig_telemetry_1m`) aggregates downsampled 1-minute averages (`avg_wob`, `avg_rpm`, `avg_spp`, `max_depth_md`) for fast historical queries.
+### 5. Digital Twin Forward Physics & 3D Trajectory
+- **Teale's Mechanical Specific Energy (MSE)**: Real-time kpsi computation $\text{MSE} = \frac{\text{WOB}}{A_b} + \frac{13.33 \times \text{RPM} \times \text{Torque}}{A_b \times \text{ROP}}$ quantifying rock-cutting efficiency.
+- **Equivalent Circulating Density (ECD)**: Dynamic ppg accounting for annular friction losses against formation fracture limits.
+- **Corrected $d$-Exponent ($d_{\text{xc}}$)**: Real-time compaction trendline predicting formation fluid overpressure **prior to surface pit gain**.
+- **Minimum Curvature 3D Trajectory Engine**: Computes exact directional survey stations $(\text{North}, \text{East}, \text{TVD})$ and Dogleg Severity (DLS in $^\circ/100\text{ ft}$).
+- **Emergency Alert Webhooks**: Concurrently dispatches `CRITICAL` drilling incidents to Slack, Microsoft Teams, and PagerDuty.
+- **Turnkey Grafana & Prometheus**: Built-in automated provisioning (`localhost:3000`, admin/admin) scraping Prometheus metrics every 5 seconds.
 
 ---
 

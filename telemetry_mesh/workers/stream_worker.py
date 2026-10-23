@@ -15,6 +15,7 @@ from telemetry_mesh.config import settings
 from telemetry_mesh.models.anomaly import AnomalyEvent
 from telemetry_mesh.models.telemetry import RigTelemetry
 from telemetry_mesh.persistence.repository import TelemetryRepository
+from telemetry_mesh.workers.alert_dispatcher import alert_dispatcher
 from telemetry_mesh.workers.ml_anomaly import StreamingMlDetector
 from telemetry_mesh.workers.ollama_pool import OllamaWorkerPool
 from telemetry_mesh.workers.sliding_window import WindowManager
@@ -188,6 +189,9 @@ class StreamWorkerNode:
 
             # Publish enriched anomaly to Redis stream
             await self.producer.publish_anomaly(anomaly)
+
+            # Dispatch external incident alert if severity meets threshold
+            await alert_dispatcher.dispatch(anomaly)
 
             # Invoke callback (e.g. WebSocket broadcast)
             if self.on_anomaly_callback:

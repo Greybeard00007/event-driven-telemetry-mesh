@@ -15,10 +15,42 @@ from telemetry_mesh.ingestion.validator import TelemetryValidator
 from telemetry_mesh.models.anomaly import AnomalyEvent, AnomalyType
 from telemetry_mesh.models.telemetry import RigTelemetry
 from telemetry_mesh.persistence.audit import audit_manager
+from telemetry_mesh.workers.alert_dispatcher import alert_dispatcher
+from telemetry_mesh.workers.physics_engine import DrillingPhysicsEngine
+from telemetry_mesh.workers.trajectory_engine import WellboreTrajectoryEngine
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Global engines for trajectory and physics evaluation
+_physics_engine = DrillingPhysicsEngine()
+_trajectory_engines: Dict[str, WellboreTrajectoryEngine] = {}
+
+
+def get_trajectory_engine(rig_id: str, well_id: str = "WELL-001") -> WellboreTrajectoryEngine:
+    if rig_id not in _trajectory_engines:
+        engine = WellboreTrajectoryEngine(rig_id=rig_id, well_id=well_id)
+        # Initialize with baseline survey stations (Kickoff -> Tangent)
+        engine.add_survey_station(md=0.0, inc_deg=0.0, azi_deg=0.0)
+        engine.add_survey_station(md=4000.0, inc_deg=0.0, azi_deg=0.0)
+        engine.add_survey_station(md=5500.0, inc_deg=18.5, azi_deg=45.0)
+        engine.add_survey_station(md=7000.0, inc_deg=34.0, azi_deg=47.2)
+        engine.add_survey_station(md=8500.0, inc_deg=45.0, azi_deg=46.8)
+        _trajectory_engines[rig_id] = engine
+    return _trajectory_engines[rig_id]
+
+
+class SurveyStationRequest(BaseModel):
+    rig_id: str = Field(..., examples=["RIG-TITAN"])
+    well_id: str = Field(default="WELL-001")
+    md: float = Field(..., ge=0.0, examples=[8600.0])
+    inc_deg: float = Field(..., ge=0.0, le=180.0, examples=[46.2])
+    azi_deg: float = Field(..., ge=0.0, le=360.0, examples=[47.0])
+
+
+class WebhookRegisterRequest(BaseModel):
+    url: str = Field(..., examples=["https://hooks.slack.com/services/T00/B00/X00"])
 
 
 class AnomalyInjectionRequest(BaseModel):
@@ -225,6 +257,82 @@ async def get_metrics(request: Request):
         "anomalies_total": worker.anomalies_detected_count if worker else 0,
         "reclaimed_total": worker.reclaimed_count if worker else 0,
         "stream_stats": stream_stats,
+    }
+
+
+@router.get("/api/v1/telemetry/physics")
+async def get_telemetry_physics(
+    request: Request,
+    rig_id: Optional[str] = Query("RIG-TITAN"),
+):
+    """Calculate real-time MSE, ECD, and d_xc for the latest rig measurement."""
+    repository = getattr(request.app.state, "repository", None)
+    if not repository:
+        raise HTTPException(status_code=503, detail="Repository not initialized")
+
+    records = await repository.get_recent_telemetry(rig_id=rig_id, limit=1)
+    if not records:
+        raise HTTPException(status_code=404, detail=f"No telemetry found for rig {rig_id}")
+
+    latest = records[-1]
+    physics = _physics_engine.evaluate_telemetry(latest)
+    return {
+        "rig_id": latest.rig_id,
+        "well_id": latest.well_id,
+        "timestamp": latest.timestamp.isoformat(),
+        "depth_md": latest.depth_md,
+        "physics": physics,
+    }
+
+
+@router.get("/api/v1/wellbore/trajectory")
+async def get_wellbore_trajectory(
+    rig_id: str = Query("RIG-TITAN"),
+    well_id: str = Query("WELL-001"),
+):
+    """Retrieve 3D Cartesian coordinates along directional wellbore trajectory."""
+    engine = get_trajectory_engine(rig_id=rig_id, well_id=well_id)
+    points = engine.get_trajectory()
+    return {
+        "rig_id": rig_id,
+        "well_id": well_id,
+        "total_stations": len(points),
+        "trajectory": [p.model_dump(mode="json") for p in points],
+    }
+
+
+@router.post("/api/v1/wellbore/survey")
+async def add_directional_survey(payload: SurveyStationRequest):
+    """Add a new MWD survey station and compute Minimum Curvature coordinates."""
+    engine = get_trajectory_engine(rig_id=payload.rig_id, well_id=payload.well_id)
+    new_point = engine.add_survey_station(
+        md=payload.md,
+        inc_deg=payload.inc_deg,
+        azi_deg=payload.azi_deg,
+    )
+    return {
+        "status": "added",
+        "rig_id": payload.rig_id,
+        "well_id": payload.well_id,
+        "computed_point": new_point.model_dump(mode="json"),
+    }
+
+
+@router.post("/api/v1/alerts/webhooks")
+async def register_alert_webhook(payload: WebhookRegisterRequest):
+    """Register an incident response webhook URL (Slack / Teams / PagerDuty)."""
+    alert_dispatcher.add_webhook(payload.url)
+    return {"status": "registered", "total_webhooks": len(alert_dispatcher.webhook_urls)}
+
+
+@router.get("/api/v1/alerts/webhooks")
+async def list_alert_webhooks():
+    """List registered alert webhook targets."""
+    return {
+        "total": len(alert_dispatcher.webhook_urls),
+        "webhooks": alert_dispatcher.webhook_urls,
+        "total_dispatched": alert_dispatcher.total_dispatched,
+        "total_failed": alert_dispatcher.total_failed,
     }
 
 

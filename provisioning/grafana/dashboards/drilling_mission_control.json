@@ -1,0 +1,69 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Published Events Total",
+      "type": "stat",
+      "targets": [{ "expr": "telemetry_events_published_total", "refId": "A" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "title": "Evaluated Records Total",
+      "type": "stat",
+      "targets": [{ "expr": "telemetry_events_processed_total", "refId": "A" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "title": "Ollama Diagnosed Anomalies",
+      "type": "stat",
+      "targets": [{ "expr": "telemetry_anomalies_detected_total", "refId": "A" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "title": "Consumer Lag (Pending Queue)",
+      "type": "gauge",
+      "targets": [{ "expr": "telemetry_consumer_lag_pending", "refId": "A" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "title": "Ingestion Rate (records/sec)",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(telemetry_events_published_total[30s])", "refId": "A" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
+      "title": "Stream Buffer Length",
+      "type": "timeseries",
+      "targets": [{ "expr": "telemetry_stream_length", "refId": "A" }]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["drilling", "witsml", "redis", "ai"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Drilling Telemetry Mesh // Mission Control",
+  "uid": "telemetry-mesh-mc",
+  "version": 1
+}
