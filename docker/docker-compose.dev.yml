@@ -1,0 +1,20 @@
+# Docker Compose development overrides for live-reloading and lightweight local execution
+services:
+  ingestion-service:
+    command: ["uvicorn", "telemetry_mesh.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./src:/app/src:ro
+      - ./telemetry_mesh:/app/telemetry_mesh:ro
+      - ./scripts:/app/scripts:ro
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - OLLAMA_FALLBACK_MOCK=true
+
+  stream-worker-1:
+    volumes:
+      - ./src:/app/src:ro
+      - ./telemetry_mesh:/app/telemetry_mesh:ro
+    environment:
+      - LOG_LEVEL=DEBUG
+      - OLLAMA_FALLBACK_MOCK=true

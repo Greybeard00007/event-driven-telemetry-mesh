@@ -13,7 +13,7 @@ make setup
 make up         # Start full multi-container stack (Redis, Timescale, Ollama, API, Workers, Grafana)
 make down       # Stop all running containers
 make logs       # Tail real-time service logs
-make test       # Run complete pytest test suite (40 tests)
+make test       # Run complete pytest test suite (46 tests)
 make bench      # Run pipeline throughput and latency benchmarks
 make tui        # Launch ANSI terminal mission control
 make lint       # Run ruff code linter
@@ -33,4 +33,4 @@ All changes must pass:
 ```bash
 pytest -v
 ```
-All 40 unit and integration tests run in under 1 second without requiring external network dependencies.
+All 46 unit and integration tests run in under 2 seconds without requiring external network dependencies.

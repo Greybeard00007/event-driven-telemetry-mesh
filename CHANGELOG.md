@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1] - 2026-10-23
+### Added
+- Standardized project directory architecture (`src/`, `configs/`, `docker/`, `docs/`, `tests/`).
+- Modular infrastructure configuration templates in `configs/` for Prometheus, TimescaleDB, Grafana, and environment variables.
+- Container infrastructure assets in `docker/` including multi-stage Dockerfile, turnkey docker-compose, dev reload overlay, and entrypoint script.
+- Expanded test coverage with dedicated suites for `TelemetrySimulator` (`tests/test_simulator.py`) and configuration (`tests/test_config.py`), raising passing tests to 46.
+- Enhanced `Makefile` with dynamic virtualenv tool resolution (`.venv/bin/pytest`).
+- Polished `README.md` with ASCII system architecture diagram and refined quickstart guides.
+
 ## [1.0.0] - 2026-10-22
 ### Added
 - High-throughput Redis Streams producer with pipelined ingestion and approximate trimming (`MAXLEN ~ 100,000`).

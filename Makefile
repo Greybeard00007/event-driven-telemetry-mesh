@@ -1,9 +1,14 @@
 .RECIPEPREFIX = >
 .PHONY: setup up down logs test bench tui lint fmt security clean
 
+VENV ?= .venv
+PYTHON ?= $(shell if [ -f $(VENV)/bin/python ]; then echo $(VENV)/bin/python; else echo python3; fi)
+PYTEST ?= $(shell if [ -f $(VENV)/bin/pytest ]; then echo $(VENV)/bin/pytest; else echo pytest; fi)
+
 setup:
 > cp -n .env.example .env || true
-> pip install -e ".[dev]"
+> $(PYTHON) -m pip install --upgrade pip
+> $(PYTHON) -m pip install -e ".[dev]"
 
 up:
 > docker compose up -d --build
@@ -15,13 +20,13 @@ logs:
 > docker compose logs -f
 
 test:
-> pytest -v
+> $(PYTEST) -v
 
 bench:
-> python scripts/benchmark_pipeline.py
+> $(PYTHON) scripts/benchmark_pipeline.py
 
 tui:
-> python scripts/telemetry_tui.py
+> $(PYTHON) scripts/telemetry_tui.py
 
 lint:
 > ruff check . || true
