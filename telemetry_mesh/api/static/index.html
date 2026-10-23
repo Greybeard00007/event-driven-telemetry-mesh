@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telemetry Mesh // Real-Time AI Drilling Operations</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header class="app-header">
+        <div class="logo-area">
+            <div class="pulse-indicator online"></div>
+            <h1>EVENT-DRIVEN TELEMETRY MESH</h1>
+            <span class="sub-badge">WITSML &bull; REDIS STREAMS &bull; OLLAMA AI</span>
+        </div>
+        <div class="system-pills">
+            <div class="pill" id="pill-ws"><span class="dot"></span> WS: <span id="ws-status">Connecting</span></div>
+            <div class="pill" id="pill-broker"><span class="dot"></span> Broker: <span id="broker-status">Active</span></div>
+            <div class="pill" id="pill-timescale"><span class="dot"></span> TimescaleDB: <span id="db-status">Online</span></div>
+            <div class="pill" id="pill-ollama"><span class="dot"></span> Ollama: <span id="ollama-status">Ready</span></div>
+        </div>
+    </header>
+
+    <main class="dashboard-layout">
+        <!-- Top KPI Metric Cards -->
+        <section class="kpi-row">
+            <div class="kpi-card">
+                <span class="kpi-label">INGESTION RATE</span>
+                <span class="kpi-val" id="kpi-rate">0 <small>ev/s</small></span>
+                <span class="kpi-sub" id="kpi-total-published">0 Total Events</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-label">STREAM QUEUE DEPTH</span>
+                <span class="kpi-val" id="kpi-queue">0</span>
+                <span class="kpi-sub">Pending XREADGROUP</span>
+            </div>
+            <div class="kpi-card">
+                <span class="kpi-label">ACTIVE RIGS</span>
+                <span class="kpi-val" id="kpi-rigs">3</span>
+                <span class="kpi-sub" id="active-rig-names">TITAN, ORION, APEX</span>
+            </div>
+            <div class="kpi-card alert-card">
+                <span class="kpi-label">ANOMALIES DIAGNOSED</span>
+                <span class="kpi-val" id="kpi-anomalies">0</span>
+                <span class="kpi-sub">Ollama AI Interventions</span>
+            </div>
+        </section>
+
+        <!-- Main Body Grid: Telemetry Charts on Left, AI Reasoning on Right -->
+        <div class="grid-content">
+            <!-- Left: Telemetry Visualizer -->
+            <section class="telemetry-panel">
+                <div class="panel-header">
+                    <div class="panel-title-group">
+                        <h2>LIVE RIG TELEMETRY</h2>
+                        <select id="rig-selector" class="rig-select">
+                            <option value="ALL">All Rigs (Multi-Stream)</option>
+                            <option value="RIG-TITAN" selected>RIG-TITAN (Well-001)</option>
+                            <option value="RIG-ORION">RIG-ORION (Well-002)</option>
+                            <option value="RIG-APEX">RIG-APEX (Well-003)</option>
+                        </select>
+                    </div>
+                    <div class="telemetry-current-stats" id="current-gauges">
+                        <div class="mini-gauge"><span>DEPTH:</span> <strong id="gauge-depth">8,520 ft</strong></div>
+                        <div class="mini-gauge"><span>WOB:</span> <strong id="gauge-wob">28.4 klbf</strong></div>
+                        <div class="mini-gauge"><span>RPM:</span> <strong id="gauge-rpm">122 RPM</strong></div>
+                        <div class="mini-gauge"><span>SPP:</span> <strong id="gauge-spp">2,940 psi</strong></div>
+                        <div class="mini-gauge"><span>FLOW:</span> <strong id="gauge-flow">620 / 622 gpm</strong></div>
+                    </div>
+                </div>
+
+                <div class="charts-container">
+                    <div class="chart-wrapper">
+                        <canvas id="chart-mechanics"></canvas>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="chart-hydraulics"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right: Ollama AI Reasoning Stream & Alert Feed -->
+            <section class="ai-panel">
+                <div class="panel-header">
+                    <h2>OLLAMA AI REASONING FEED</h2>
+                    <span class="ai-tag">Real-Time Inferences</span>
+                </div>
+                <div class="ai-alerts-scroll" id="ai-alerts-container">
+                    <div class="empty-state" id="empty-alerts">
+                        <div class="empty-icon">&#128752;</div>
+                        <p>Awaiting anomaly window trigger...</p>
+                        <small>Deterministic physics engine evaluates continuous telemetry micro-batches. Anomalous windows are routed asynchronously to Ollama LLM worker pools.</small>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Simulator Injection Bar -->
+        <section class="injection-panel">
+            <div class="inject-header">
+                <h3>&#9889; DRILLING ANOMALY TEST INJECTOR</h3>
+                <span>Inject controlled drilling hazards to observe live threshold detection & Ollama AI diagnosis</span>
+            </div>
+            <div class="inject-controls">
+                <label>Target Rig:
+                    <select id="inject-rig">
+                        <option value="RIG-TITAN">RIG-TITAN</option>
+                        <option value="RIG-ORION">RIG-ORION</option>
+                        <option value="RIG-APEX">RIG-APEX</option>
+                    </select>
+                </label>
+                <label>Anomaly Type:
+                    <select id="inject-type">
+                        <option value="STICK_SLIP">STICK_SLIP (Torsional Resonance / Stall-Release)</option>
+                        <option value="KICK_INFLUX">KICK_INFLUX (Formation Fluid Influx / Pit Gain)</option>
+                        <option value="PACK_OFF">PACK_OFF (Annular Cuttings Restriction / SPP Spike)</option>
+                        <option value="LOST_CIRCULATION">LOST_CIRCULATION (Mud Loss to Fractured Formation)</option>
+                        <option value="EXCESSIVE_WOB">EXCESSIVE_WOB (Over-Weight Bit Damage Risk)</option>
+                        <option value="MOTOR_STALL">MOTOR_STALL (Downhole PDM Stalled)</option>
+                    </select>
+                </label>
+                <label>Duration:
+                    <select id="inject-duration">
+                        <option value="15">15 Seconds</option>
+                        <option value="30" selected>30 Seconds</option>
+                        <option value="60">60 Seconds</option>
+                    </select>
+                </label>
+                <button id="btn-inject" class="btn-primary">Inject Anomaly Now</button>
+            </div>
+            <div id="inject-status-msg" class="inject-msg"></div>
+        </section>
+    </main>
+
+    <footer class="app-footer">
+        <span>Event-Driven Telemetry Mesh &bull; Redis Streams (XREADGROUP / XACK) &bull; TimescaleDB &bull; FastAPI</span>
+    </footer>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

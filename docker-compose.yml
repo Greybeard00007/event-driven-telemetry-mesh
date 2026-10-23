@@ -1,0 +1,144 @@
+services:
+  # ============================================================================
+  # 1. Redis Streams Message Broker
+  # ============================================================================
+  redis:
+    image: redis:7.4-alpine
+    container_name: telemetry-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - mesh-net
+
+  # ============================================================================
+  # 2. TimescaleDB Time-Series Metric Persistence
+  # ============================================================================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: telemetry-timescaledb
+    environment:
+      POSTGRES_DB: telemetry_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./scripts/init_timescaledb.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d telemetry_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - mesh-net
+
+  # ============================================================================
+  # 3. Local Ollama LLM Worker Pool
+  # ============================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: telemetry-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - mesh-net
+
+  # ============================================================================
+  # 4. Ingestion Broker, REST API, WebSockets & Real-Time Dashboard
+  # ============================================================================
+  ingestion-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telemetry-ingestion-api
+    command: ["uvicorn", "telemetry_mesh.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      - APP_ENV=production
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://postgres:postgrespassword@timescaledb:5432/telemetry_db
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=deepseek-r1:8b
+      - SIMULATOR_RIGS=3
+      - SIMULATOR_FREQUENCY_HZ=5.0
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - mesh-net
+
+  # ============================================================================
+  # 5. Scalable Asynchronous Stream Worker Nodes (Consumer Group)
+  # ============================================================================
+  stream-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telemetry-stream-worker-1
+    command: ["python", "-m", "telemetry_mesh.workers.cli"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_CONSUMER_GROUP=telemetry:workers:group
+      - REDIS_CONSUMER_NAME=worker-node-1
+      - DATABASE_URL=postgresql://postgres:postgrespassword@timescaledb:5432/telemetry_db
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=deepseek-r1:8b
+      - OLLAMA_FALLBACK_MOCK=true
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - mesh-net
+
+  stream-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telemetry-stream-worker-2
+    command: ["python", "-m", "telemetry_mesh.workers.cli"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_CONSUMER_GROUP=telemetry:workers:group
+      - REDIS_CONSUMER_NAME=worker-node-2
+      - DATABASE_URL=postgresql://postgres:postgrespassword@timescaledb:5432/telemetry_db
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=deepseek-r1:8b
+      - OLLAMA_FALLBACK_MOCK=true
+    depends_on:
+      redis:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - mesh-net
+
+volumes:
+  redis_data:
+  timescaledb_data:
+  ollama_models:
+
+networks:
+  mesh-net:
+    driver: bridge
