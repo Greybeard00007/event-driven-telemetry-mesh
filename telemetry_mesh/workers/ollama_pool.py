@@ -9,27 +9,31 @@ import httpx
 
 from telemetry_mesh.config import settings
 from telemetry_mesh.models.anomaly import AnomalyEvent, AnomalySeverity, AnomalyType, LLMDiagnosis
+from telemetry_mesh.workers.rag_knowledge import DrillingKnowledgeBase
 
 logger = logging.getLogger(__name__)
 
 
 class OllamaWorkerPool:
-    """Manages asynchronous inference requests to a local Ollama LLM instance."""
+    """Manages asynchronous inference requests to a local Ollama LLM instance with RAG and model cascading."""
 
     def __init__(
         self,
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
+        triage_model_name: Optional[str] = "llama3.2:1b",
         concurrency: Optional[int] = None,
         timeout_seconds: Optional[float] = None,
         fallback_mock: Optional[bool] = None,
     ):
         self.base_url = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
         self.model_name = model_name or settings.OLLAMA_MODEL
+        self.triage_model_name = triage_model_name or "llama3.2:1b"
         self.timeout = timeout_seconds or settings.OLLAMA_TIMEOUT_SECONDS
         self.fallback_mock = fallback_mock if fallback_mock is not None else settings.OLLAMA_FALLBACK_MOCK
         self.semaphore = asyncio.Semaphore(concurrency or settings.OLLAMA_CONCURRENCY)
         self.client: Optional[httpx.AsyncClient] = None
+        self.knowledge_base = DrillingKnowledgeBase()
 
     async def get_client(self) -> httpx.AsyncClient:
         """Lazy initialization of httpx client."""
@@ -47,7 +51,7 @@ class OllamaWorkerPool:
             self.client = None
 
     def _build_prompt(self, anomaly: AnomalyEvent) -> str:
-        """Construct a structured engineering prompt with window sensor context."""
+        """Construct a structured engineering prompt with window sensor context and RAG SOP knowledge."""
         summary = {
             "anomaly_type": anomaly.anomaly_type.value,
             "rule_triggered": anomaly.rule_triggered,
@@ -56,15 +60,21 @@ class OllamaWorkerPool:
             "recent_sensor_window": anomaly.window_metrics[-6:] if anomaly.window_metrics else [],
         }
 
+        # RAG retrieval of relevant well control SOPs
+        query = f"{anomaly.anomaly_type.value} {anomaly.rule_triggered}"
+        relevant_sops = self.knowledge_base.retrieve(query, top_k=1)
+        sop_context = "\n---\n".join([f"[{s['title']}]:\n{s['content']}" for s in relevant_sops])
+
         return (
             "You are a Senior Petroleum Wellsite Drilling Optimization Engineer. "
             "Analyze the following real-time rig sensor anomaly window and provide an immediate engineering diagnosis.\n\n"
             f"Rig: {anomaly.rig_id} | Well: {anomaly.well_id} | Time: {anomaly.timestamp.isoformat()}\n"
             f"Sensor Context:\n{json.dumps(summary, indent=2)}\n\n"
+            f"Company Standard Operating Procedures (SOPs):\n{sop_context}\n\n"
             "Respond ONLY with a valid JSON object matching this schema:\n"
             "{\n"
             '  "root_cause_analysis": "Concise physical root cause explanation",\n'
-            '  "drilling_recommendation": "Step-by-step immediate rig crew instructions",\n'
+            '  "drilling_recommendation": "Step-by-step immediate rig crew instructions aligned with SOPs",\n'
             '  "confidence_score": 0.95,\n'
             '  "urgency_level": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",\n'
             '  "preventive_measures": ["measure 1", "measure 2"]\n'
@@ -177,20 +187,23 @@ class OllamaWorkerPool:
         )
 
     async def diagnose_anomaly(self, anomaly: AnomalyEvent) -> LLMDiagnosis:
-        """Execute LLM inference via Ollama or fallback to domain heuristic."""
+        """Execute LLM inference via Ollama or fallback to domain heuristic with model cascading."""
         if not settings.OLLAMA_ENABLED:
             return self._generate_domain_fallback(anomaly)
+
+        # Model cascading: Critical anomalies use full deep reasoning model; low/medium use fast triage model
+        selected_model = self.model_name if anomaly.severity in (AnomalySeverity.CRITICAL, AnomalySeverity.HIGH) else self.triage_model_name
 
         async with self.semaphore:
             prompt = self._build_prompt(anomaly)
             client = await self.get_client()
 
             try:
-                logger.info(f"Dispatching anomaly '{anomaly.anomaly_type.value}' ({anomaly.anomaly_id[:8]}) to Ollama ({self.model_name}).")
+                logger.info(f"Dispatching anomaly '{anomaly.anomaly_type.value}' ({anomaly.anomaly_id[:8]}) to Ollama ({selected_model}).")
                 resp = await client.post(
                     "/api/generate",
                     json={
-                        "model": self.model_name,
+                        "model": selected_model,
                         "prompt": prompt,
                         "stream": False,
                         "format": "json",

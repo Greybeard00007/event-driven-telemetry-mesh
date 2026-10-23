@@ -20,6 +20,8 @@ flowchart TD
         R1["Rig Titan\n(WITSML 1.4.1.1 XML)"]
         R2["Rig Orion\n(JSON Batch 100Hz)"]
         R3["Rig Apex\n(Drill Floor MWD/LWD)"]
+        R4["Legacy Land Rig\n(WITS Level 0 TCP :9191)"]
+        R5["Modern Rig Network\n(ETP v1.2 WebSocket /ws/etp)"]
     end
 
     subgraph IngestionLayer ["Event Ingestion Broker (FastAPI & Redis Streams)"]
@@ -101,8 +103,10 @@ stateDiagram-v2
     [*] --> Ingested: XADD telemetry:stream:raw
     Ingested --> Assigned: XREADGROUP telemetry:workers:group
     Assigned --> Processing: Micro-batch pulled by Worker
-    Processing --> Evaluated: Deterministic Threshold Check
-    Evaluated --> AI_Inference: Anomaly Detected
+    Processing --> DedupCheck: Sliding Window Fingerprint
+    DedupCheck --> Evaluated: Unique Telemetry
+    DedupCheck --> Discarded: Duplicate Frame Dropped
+    Evaluated --> AI_Inference: Physics Anomaly or ML Drift
     Evaluated --> Acked: Normal Sensor Reading
     AI_Inference --> Persisted: TimescaleDB & Stream Publish
     Persisted --> Acked: XACK
@@ -111,11 +115,18 @@ stateDiagram-v2
     Assigned --> PendingEntryList: Worker Crash / Timeout (>10s)
     PendingEntryList --> Reclaimed: XAUTOCLAIM by Peer Worker
     Reclaimed --> Processing
+
+    Processing --> DLQ_Stream: Repeated Poison Pill / Parse Error
+    DLQ_Stream --> DLQ_Inspection: GET /api/v1/dlq
+    DLQ_Inspection --> Replayed: POST /api/v1/dlq/replay
+    Replayed --> Ingested
 ```
 
 - **Consumer Groups (`XREADGROUP`)**: Stateless worker nodes scale horizontally (`worker-1`, `worker-2`, ...). Redis automatically distributes micro-batches without partition locks.
 - **At-Least-Once Delivery**: Messages remain in the Pending Entries List (PEL) until explicitly acknowledged with `XACK`.
 - **Fault Recovery (`XAUTOCLAIM` / `XPENDING`)**: If a worker node crashes mid-batch, peer nodes reclaim unacknowledged messages idle for over 10 seconds, preventing message loss.
+- **Dead-Letter Queue (`telemetry:stream:dead-letter`)**: Poison pills and malformed frames are evicted with error diagnostics, preventing infinite retry blocking. Operators can inspect and replay via `/api/v1/dlq`.
+- **Idempotency & Deduplication**: Sliding-window SHA-256 fingerprinting prevents re-processing duplicate records caused by client retries or network rebroadcasts.
 
 ### 3. Deterministic Physics Guardrails + Local LLM Reasoning
 Rather than sending every telemetry tick to an LLM, the system adopts a two-tier evaluation strategy:

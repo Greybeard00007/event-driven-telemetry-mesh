@@ -6,12 +6,15 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
+from telemetry_mesh.api.prometheus import generate_prometheus_metrics
 from telemetry_mesh.api.websocket_manager import ws_manager
 from telemetry_mesh.config import settings
+from telemetry_mesh.ingestion.etp import EtpSession
 from telemetry_mesh.ingestion.parser import TelemetryParser
 from telemetry_mesh.ingestion.validator import TelemetryValidator
 from telemetry_mesh.models.anomaly import AnomalyEvent, AnomalyType
 from telemetry_mesh.models.telemetry import RigTelemetry
+from telemetry_mesh.persistence.audit import audit_manager
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,17 @@ class AnomalyInjectionRequest(BaseModel):
     rig_id: str = Field(..., examples=["RIG-TITAN"])
     anomaly_type: AnomalyType = Field(..., examples=[AnomalyType.STICK_SLIP])
     duration_seconds: float = Field(default=20.0, ge=1.0, le=300.0)
+
+
+class AnomalyAcknowledgeRequest(BaseModel):
+    driller_name: str = Field(..., examples=["John Doe (Senior Toolpusher)"])
+    action_taken: str = Field(..., examples=["Spaced out string and shut down mud pumps per API RP 53"])
+    comments: Optional[str] = Field(None, examples=["Confirmed zero annular flow. Recorded SIDPP = 450 psi."])
+
+
+class ReplayDlqRequest(BaseModel):
+    dlq_id: str
+    target_stream: Optional[str] = None
 
 
 class IngestionResponse(BaseModel):
@@ -212,6 +226,120 @@ async def get_metrics(request: Request):
         "reclaimed_total": worker.reclaimed_count if worker else 0,
         "stream_stats": stream_stats,
     }
+
+
+@router.get("/metrics")
+async def get_prometheus_metrics(request: Request):
+    """Expose Prometheus formatted metrics for scrapers."""
+    producer = getattr(request.app.state, "producer", None)
+    worker = getattr(request.app.state, "worker", None)
+    consumer = getattr(request.app.state, "consumer", None)
+    simulator = getattr(request.app.state, "simulator", None)
+
+    stream_stats = {}
+    if consumer:
+        try:
+            stream_stats = await consumer.get_stream_stats()
+        except Exception:
+            pass
+
+    metrics_text = generate_prometheus_metrics(
+        published_total=producer.total_published if producer else 0,
+        processed_total=worker.processed_records_count if worker else 0,
+        anomalies_total=worker.anomalies_detected_count if worker else 0,
+        duplicates_dropped=worker.duplicates_dropped_count if worker else 0,
+        dlq_total=worker.dlq_routed_count if worker else 0,
+        stream_length=stream_stats.get("length", 0),
+        consumer_pending=stream_stats.get("pending", 0),
+        active_rigs=len(simulator.rigs) if simulator else 1,
+        active_websockets=ws_manager.client_count,
+    )
+    return Response(content=metrics_text, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@router.post("/api/v1/anomalies/{anomaly_id}/acknowledge")
+async def acknowledge_anomaly(
+    request: Request,
+    anomaly_id: str,
+    payload: AnomalyAcknowledgeRequest,
+):
+    """Log an operator compliance sign-off and mitigation action for an anomaly."""
+    repository = getattr(request.app.state, "repository", None)
+    anomalies = await repository.get_recent_anomalies(limit=100) if repository else []
+
+    target_anomaly = None
+    for a in anomalies:
+        if a.anomaly_id == anomaly_id:
+            target_anomaly = a
+            a.acknowledged = True
+            break
+
+    rig_id = target_anomaly.rig_id if target_anomaly else "UNKNOWN"
+    audit_entry = audit_manager.record_signoff(
+        anomaly_id=anomaly_id,
+        rig_id=rig_id,
+        driller_name=payload.driller_name,
+        action_taken=payload.action_taken,
+        comments=payload.comments,
+    )
+    return {"status": "acknowledged", "audit_entry": audit_entry.model_dump(mode="json")}
+
+
+@router.get("/api/v1/audit")
+async def get_audit_trail(
+    rig_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """Query operational compliance audit logs."""
+    entries = audit_manager.get_entries(rig_id=rig_id, limit=limit)
+    return [e.model_dump(mode="json") for e in entries]
+
+
+@router.get("/api/v1/dlq")
+async def get_dlq_info(request: Request):
+    """Inspect Dead-Letter Queue status and recent messages."""
+    worker = getattr(request.app.state, "worker", None)
+    if not worker or not worker.dlq:
+        return {"status": "inactive", "messages": []}
+
+    stats = await worker.dlq.get_dlq_stats()
+    messages = await worker.dlq.inspect_dlq(count=15)
+    return {"stats": stats, "recent_messages": messages}
+
+
+@router.post("/api/v1/dlq/replay")
+async def replay_dlq(request: Request, payload: ReplayDlqRequest):
+    """Replay a dead-letter message back into processing stream."""
+    worker = getattr(request.app.state, "worker", None)
+    if not worker or not worker.dlq:
+        raise HTTPException(status_code=503, detail="DLQ not initialized")
+
+    target = payload.target_stream or settings.REDIS_STREAM_RAW
+    success = await worker.dlq.replay_dlq_message(payload.dlq_id, target)
+    if not success:
+        raise HTTPException(status_code=404, detail="DLQ message not found or payload corrupt")
+    return {"status": "replayed", "dlq_id": payload.dlq_id, "target_stream": target}
+
+
+@router.websocket("/ws/etp")
+async def websocket_etp_endpoint(websocket: WebSocket, request: Request):
+    """Energistics Transfer Protocol (ETP v1.2) WebSocket streaming adapter."""
+    await websocket.accept()
+    session = EtpSession(websocket)
+    producer = getattr(request.app.state, "producer", None)
+
+    async def on_telemetry(records: List[RigTelemetry]):
+        if producer:
+            await producer.publish_batch_direct(records)
+
+    try:
+        while True:
+            raw_msg = await websocket.receive_text()
+            await session.handle_message(raw_msg, on_telemetry=on_telemetry)
+    except WebSocketDisconnect:
+        logger.info(f"ETP WebSocket client disconnected: {session.session_id}")
+    except Exception as e:
+        logger.debug(f"ETP WebSocket session error: {e}")
 
 
 @router.websocket("/ws/live")

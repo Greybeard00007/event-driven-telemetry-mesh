@@ -76,6 +76,7 @@ services:
       - SIMULATOR_FREQUENCY_HZ=5.0
     ports:
       - "8000:8000"
+      - "9191:9191"
     depends_on:
       redis:
         condition: service_healthy

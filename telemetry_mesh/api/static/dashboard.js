@@ -252,8 +252,13 @@ function handleAnomalyAlert(anomaly) {
                 <span>URGENCY: ${anomaly.severity}</span>
             </div>
             <div class="diag-body">${diag.root_cause_analysis || "Threshold deviation evaluated."}</div>
-            <div class="rec-title">Immediate Drilling Crew Action</div>
+            <div class="rec-title">Immediate Drilling Crew Action (SOP Grounded)</div>
             <div class="rec-body">${diag.drilling_recommendation || "Maintain active monitoring."}</div>
+        </div>
+        <div class="ack-area" id="ack-area-${anomaly.anomaly_id}" style="margin-top:6px; display:flex; justify-content:flex-end;">
+            <button class="btn-primary" style="padding:4px 10px; font-size:0.75rem; background:#334155;" onclick="acknowledgeAnomaly('${anomaly.anomaly_id}', '${anomaly.rig_id}')">
+                &#9998; Acknowledge & Log Mitigation
+            </button>
         </div>
     `;
 
@@ -264,6 +269,35 @@ function handleAnomalyAlert(anomaly) {
         container.removeChild(container.lastChild);
     }
 }
+
+// Operator Anomaly Signoff
+window.acknowledgeAnomaly = async function(anomalyId, rigId) {
+    const drillerName = prompt("Enter Driller / Toolpusher Name:", "Driller On Duty");
+    if (!drillerName) return;
+    const actionTaken = prompt("Action Taken & Mitigation Performed:", "Confirmed parameter status; followed well control procedure.");
+    if (!actionTaken) return;
+
+    try {
+        const resp = await fetch(`/api/v1/anomalies/${anomalyId}/acknowledge`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                driller_name: drillerName,
+                action_taken: actionTaken,
+                comments: "Logged via mission-control dashboard",
+            }),
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            const ackArea = document.getElementById(`ack-area-${anomalyId}`);
+            if (ackArea) {
+                ackArea.innerHTML = `<span style="color:#22c55e; font-size:0.75rem; font-family:var(--font-mono);">&#10003; ACKNOWLEDGED by ${drillerName} [Sig: ${data.audit_entry.audit_id}]</span>`;
+            }
+        }
+    } catch (e) {
+        alert("Error logging acknowledgment: " + e.message);
+    }
+};
 
 // Setup Event Handlers
 function setupEventHandlers() {
@@ -335,6 +369,14 @@ function startMetricsPolling() {
                 if (m.stream_stats && typeof m.stream_stats.pending !== "undefined") {
                     document.getElementById("kpi-queue").innerText = m.stream_stats.pending;
                 }
+            }
+
+            const dlqResp = await fetch("/api/v1/dlq");
+            if (dlqResp.ok) {
+                const dlqData = await dlqResp.json();
+                const dlqCount = dlqData.stats ? (dlqData.stats.length || 0) : 0;
+                const dlqEl = document.getElementById("dlq-count");
+                if (dlqEl) dlqEl.innerText = dlqCount;
             }
 
             const hResp = await fetch("/api/v1/health");

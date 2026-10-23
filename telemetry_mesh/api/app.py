@@ -17,6 +17,7 @@ from telemetry_mesh.broker.producer import TelemetryProducer
 from telemetry_mesh.broker.redis_client import close_redis_client, get_redis_client
 from telemetry_mesh.config import settings
 from telemetry_mesh.ingestion.simulator import TelemetrySimulator
+from telemetry_mesh.ingestion.wits0 import Wits0TcpServer
 from telemetry_mesh.models.anomaly import AnomalyEvent
 from telemetry_mesh.models.telemetry import RigTelemetry
 from telemetry_mesh.persistence.db import close_db_pool, get_db_pool
@@ -92,12 +93,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     sim_task = asyncio.create_task(simulator.run_loop(on_simulator_batch), name="rig-simulator")
     app.state.sim_task = sim_task
 
+    # 6. WITS Level 0 TCP Socket Server
+    async def on_wits0_record(rec: RigTelemetry):
+        await producer.enqueue(rec)
+
+    wits0_server = Wits0TcpServer(port=9191, on_record_callback=on_wits0_record)
+    try:
+        await wits0_server.start()
+        app.state.wits0_server = wits0_server
+    except Exception as e:
+        logger.warning(f"Could not bind WITS0 TCP server on port 9191 ({e}). Continuing without TCP listener.")
+        app.state.wits0_server = None
+
     logger.info("All streaming mesh services initialized successfully.")
 
     yield
 
     # Shutdown sequence
     logger.info("Shutting down streaming mesh services...")
+    if getattr(app.state, "wits0_server", None):
+        await app.state.wits0_server.stop()
     simulator.stop()
     if sim_task and not sim_task.done():
         sim_task.cancel()

@@ -8,11 +8,14 @@ from typing import Callable, List, Optional
 import redis.asyncio as aioredis
 
 from telemetry_mesh.broker.consumer import TelemetryConsumer
+from telemetry_mesh.broker.dedup import DeduplicationEngine
+from telemetry_mesh.broker.dlq import DeadLetterQueue
 from telemetry_mesh.broker.producer import TelemetryProducer
 from telemetry_mesh.config import settings
 from telemetry_mesh.models.anomaly import AnomalyEvent
 from telemetry_mesh.models.telemetry import RigTelemetry
 from telemetry_mesh.persistence.repository import TelemetryRepository
+from telemetry_mesh.workers.ml_anomaly import StreamingMlDetector
 from telemetry_mesh.workers.ollama_pool import OllamaWorkerPool
 from telemetry_mesh.workers.sliding_window import WindowManager
 from telemetry_mesh.workers.threshold_engine import ThresholdEngine
@@ -32,6 +35,7 @@ class StreamWorkerNode:
         ollama_pool: Optional[OllamaWorkerPool] = None,
         repository: Optional[TelemetryRepository] = None,
         threshold_engine: Optional[ThresholdEngine] = None,
+        dlq: Optional[DeadLetterQueue] = None,
         on_anomaly_callback: Optional[Callable[[AnomalyEvent], None]] = None,
         on_telemetry_callback: Optional[Callable[[List[RigTelemetry]], None]] = None,
     ):
@@ -43,6 +47,9 @@ class StreamWorkerNode:
         self.repository = repository or TelemetryRepository()
         self.threshold_engine = threshold_engine or ThresholdEngine()
         self.window_manager = WindowManager()
+        self.dlq = dlq or DeadLetterQueue(redis_client=self.redis)
+        self.dedup = DeduplicationEngine()
+        self.ml_detector = StreamingMlDetector()
 
         self.on_anomaly_callback = on_anomaly_callback
         self.on_telemetry_callback = on_telemetry_callback
@@ -56,6 +63,8 @@ class StreamWorkerNode:
         self.processed_records_count: int = 0
         self.anomalies_detected_count: int = 0
         self.reclaimed_count: int = 0
+        self.duplicates_dropped_count: int = 0
+        self.dlq_routed_count: int = 0
 
     async def start(self) -> None:
         """Initialize consumer groups and start the worker ingestion loop."""
@@ -119,16 +128,27 @@ class StreamWorkerNode:
 
         for msg_id, record in batch:
             msg_ids.append(msg_id)
+
+            # Idempotency deduplication check
+            if self.dedup.is_duplicate(record):
+                self.duplicates_dropped_count += 1
+                continue
+
             records.append(record)
 
             # Update rolling sliding window for this rig
             window = self.window_manager.get_window(record.rig_id)
             window.append(record)
 
-            # Evaluate deterministic threshold rules
+            # 1. Deterministic physical threshold evaluation
             anomaly = self.threshold_engine.evaluate(record, window)
             if anomaly:
                 anomalies_to_diagnose.append(anomaly)
+            else:
+                # 2. Unsupervised streaming ML drift & washout evaluation
+                ml_anomaly = self.ml_detector.evaluate(record)
+                if ml_anomaly:
+                    anomalies_to_diagnose.append(ml_anomaly)
 
         # 3. Asynchronously dispatch anomalies to Ollama worker pool
         if anomalies_to_diagnose:
